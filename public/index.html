@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta charset="utf-8">
+    <title>Mobile Touchpad</title>
+    <style>
+        :root {
+            --setup-height: 56px;
+        }
+
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            background: #111;
+            color: #0f0;
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none;
+            box-sizing: border-box;
+            overflow: hidden;
+        }
+
+        /* Top setup bar is fixed so touchpad can occupy full viewport below */
+        #setup {
+            position: fixed;
+            top: env(safe-area-inset-top, 0);
+            left: 0;
+            right: 0;
+            height: var(--setup-height);
+            padding: 8px clamp(8px, 4vw, 16px) 8px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            background: rgba(17, 17, 17, 0.95);
+            border-bottom: 1px solid rgba(0, 255, 0, 0.06);
+            z-index: 10;
+            box-sizing: border-box;
+        }
+
+        #token {
+            flex: 1 1 auto;
+            min-width: 0;
+            padding: 10px;
+            font-size: 16px;
+            border-radius: 6px;
+            border: 2px solid #0f0;
+            background: #222;
+            color: #0f0;
+            box-sizing: border-box;
+        }
+
+        .btn {
+            padding: 10px 12px;
+            font-size: 15px;
+            border-radius: 6px;
+            border: 2px solid #0f0;
+            background: #222;
+            color: #0f0;
+            flex: 0 0 auto;
+            touch-action: manipulation;
+        }
+
+        /* Touchpad fills full width and remaining height */
+        #touchpad {
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: calc(var(--setup-height) + env(safe-area-inset-top, 0));
+            bottom: env(safe-area-inset-bottom, 0);
+            margin: 0;
+            border: 3px solid lime;
+            border-radius: 8px 8px 0 0;
+            background: #222;
+            touch-action: none;
+            display: none;
+            box-sizing: border-box;
+            width: 100vw;
+            /* height is handled by top/bottom positioning; JS fallback will set exact px height */
+            overflow: hidden;
+        }
+
+        /* Smaller devices: tighten spacing */
+        @media (max-width: 420px) {
+            :root {
+                --setup-height: 52px;
+            }
+
+            #token {
+                font-size: 15px;
+                padding: 9px;
+            }
+
+            .btn {
+                padding: 9px 10px;
+                font-size: 14px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div id="setup">
+    <input id="token" type="text" placeholder="Secret Token" autocomplete="off" inputmode="text">
+    <button id="connectBtn" class="btn">Connect</button>
+    <button id="disconnectBtn" class="btn" style="display:none">Disconnect</button>
+</div>
+
+<div id="touchpad" role="application" aria-label="Touchpad area"></div>
+
+<script>
+  /* Brief: keep existing touch/WS logic but ensure touchpad occupies full viewport.
+     resizePad() computes available height and sets it as fallback for browsers that
+     don't support CSS env() variables or exact positioning. */
+
+  const pad = document.getElementById('touchpad');
+  const setup = document.getElementById('setup');
+  const tokenInput = document.getElementById('token');
+  const connectBtn = document.getElementById('connectBtn');
+  const disconnectBtn = document.getElementById('disconnectBtn');
+
+  let ws = null;
+
+  /* Toggle UI when connected */
+  function setConnected(connected) {
+    if (connected) {
+      tokenInput.style.display = 'none';
+      connectBtn.style.display = 'none';
+      disconnectBtn.style.display = 'inline-block';
+      pad.style.display = 'block';
+      resizePad();
+    } else {
+      tokenInput.style.display = '';
+      connectBtn.style.display = '';
+      disconnectBtn.style.display = 'none';
+      pad.style.display = 'none';
+    }
+  }
+
+  /* Fallback height calculation (pixels) for devices without reliable env() support */
+  function resizePad() {
+    // available height = viewport height - setup bottom - safe area bottom
+    const rect = setup.getBoundingClientRect();
+    const topOffset = rect.bottom; // includes any safe-area top
+    const safeBottom = (typeof window.visualViewport !== 'undefined')
+      ? (window.innerHeight - window.visualViewport.height) // rough fallback
+      : 0;
+    const avail = Math.max(window.innerHeight - topOffset - safeBottom, 140);
+    pad.style.height = avail + 'px';
+  }
+
+  /* Basic connect/disconnect handlers (existing WS & touch code should be attached as before) */
+  connectBtn.addEventListener('click', () => {
+    const token = tokenInput.value.trim();
+    if (!token) {
+      alert('Enter secret token');
+      return;
+    }
+    connectBtn.disabled = true;
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${protocol}//${location.host}/ws?token=${encodeURIComponent(token)}`);
+    ws.addEventListener('open', () => {
+      setConnected(true);
+      ws.send(JSON.stringify({
+        type: 'deviceInfo',
+        touchpadWidth: pad.clientWidth,
+        touchpadHeight: pad.clientHeight,
+        screenWidth: window.innerWidth,
+        screenHeight: window.innerHeight
+      }));
+    });
+    ws.addEventListener('close', () => {
+      setConnected(false);
+      connectBtn.disabled = false;
+    });
+    ws.addEventListener('error', () => {
+      connectBtn.disabled = false;
+    });
+  });
+
+  disconnectBtn.addEventListener('click', () => {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+    else setConnected(false);
+  });
+
+  /* Touch handlers (kept minimal here — integrate your existing move/click/gesture logic) */
+  function dist(t1, t2) {
+    return Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+  }
+
+  let lastX = 0, lastY = 0, isDown = false, startX = 0, startY = 0, touchStartTime = 0, lastClickTime = 0,
+    clickDebounceMs = 50, tapMaxMovePx = 10;
+  let lastTwoTouch = null, lastPinchDist = null, lastThreeTouch = null;
+
+  pad.addEventListener('touchstart', e => {
+    if (e.touches.length === 1) {
+      const t = e.touches[0];
+      lastX = t.clientX;
+      lastY = t.clientY;
+      startX = t.clientX;
+      startY = t.clientY;
+      isDown = true;
+      touchStartTime = Date.now();
+    } else if (e.touches.length === 2) {
+      const t1 = e.touches[0], t2 = e.touches[1];
+      lastTwoTouch = {x: (t1.clientX + t2.clientX) / 2, y: (t1.clientY + t2.clientY) / 2};
+      lastPinchDist = dist(t1, t2);
+    } else if (e.touches.length === 3) {
+      lastThreeTouch = {
+        x: (e.touches[0].clientX + e.touches[1].clientX + e.touches[2].clientX) / 3,
+        y: (e.touches[0].clientY + e.touches[1].clientY + e.touches[2].clientY) / 3
+      };
+    }
+  });
+
+  pad.addEventListener('touchmove', e => {
+    e.preventDefault();
+    if (!ws || ws.readyState !== 1) return;
+    if (e.touches.length === 1 && isDown) {
+      const t = e.touches[0];
+      const dx = t.clientX - lastX, dy = t.clientY - lastY;
+      lastX = t.clientX;
+      lastY = t.clientY;
+      ws.send(JSON.stringify({type: 'move', dx, dy}));
+    } else if (e.touches.length === 2) {
+      const t1 = e.touches[0], t2 = e.touches[1];
+      const midX = (t1.clientX + t2.clientX) / 2, midY = (t1.clientY + t2.clientY) / 2;
+      if (lastTwoTouch) {
+        const dx = midX - lastTwoTouch.x, dy = midY - lastTwoTouch.y;
+        const curDist = dist(t1, t2), deltaDist = lastPinchDist ? curDist - lastPinchDist : 0;
+        const pinchThreshold = 10;
+        if (Math.abs(deltaDist) > pinchThreshold) ws.send(JSON.stringify({type: 'zoom', delta: deltaDist}));
+        else ws.send(JSON.stringify({type: 'scroll', dx, dy}));
+        lastPinchDist = curDist;
+      }
+      lastTwoTouch = {x: midX, y: midY};
+    } else if (e.touches.length === 3) {
+      const avgX = (e.touches[0].clientX + e.touches[1].clientX + e.touches[2].clientX) / 3;
+      const avgY = (e.touches[0].clientY + e.touches[1].clientY + e.touches[2].clientY) / 3;
+      if (lastThreeTouch) ws.send(JSON.stringify({
+        type: 'threeSwipe',
+        dx: avgX - lastThreeTouch.x,
+        dy: avgY - lastThreeTouch.y
+      }));
+      lastThreeTouch = {x: avgX, y: avgY};
+    }
+  });
+
+  pad.addEventListener('touchend', e => {
+    if (e.touches.length === 0 && isDown) {
+      const now = Date.now(), dt = now - touchStartTime;
+      const moveDist = Math.hypot(lastX - startX, lastY - startY);
+      if (dt <= 500 && moveDist <= tapMaxMovePx && now - lastClickTime >= clickDebounceMs) {
+        lastClickTime = now;
+        if (ws && ws.readyState === 1) ws.send(JSON.stringify({type: 'click', button: 'left'}));
+      }
+      isDown = false;
+    }
+    if (e.touches.length < 2) lastTwoTouch = lastPinchDist = null;
+    if (e.touches.length < 3) lastThreeTouch = null;
+  });
+
+  /* Keep layout correct on rotations / resize */
+  window.addEventListener('orientationchange', () => requestAnimationFrame(resizePad));
+  window.addEventListener('resize', () => requestAnimationFrame(resizePad));
+  /* initial */
+  setConnected(false);
+  resizePad();
+</script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+version: '3'
+
+# load .env then .env.local (local overrides)
+dotenv:
+  - .env
+  - .env.local
+
+tasks:
+  init-env:
+    desc: Create a .env with safe defaults (won't overwrite existing .env)
+    cmds:
+      - '[ -f ".env" ] && (echo ".env already exists; not overwriting"; exit 0)'
+      - |
+        TOKEN="$(python3 - <<'PY'
+        import secrets
+        print(secrets.token_hex(12))
+        PY
+        )" && cat > .env <<EOF
+        # Generated .env defaults — edit as needed (do not commit secrets)
+        TOKEN=$TOKEN
+        NGROK_AUTHTOKEN=
+        SCALE=10
+        ADDR=:8080
+        HTTP_PORT=8080
+        EOF
+      - 'echo ".env created (TOKEN is set). Edit .env to change values or remove TOKEN for manual configuration."'
+
+  ngrok-auth:
+    desc: Register NGROK_AUTHTOKEN with ngrok config
+    cmds:
+      - '[ -n "${NGROK_AUTHTOKEN}" ] || (echo "Set NGROK_AUTHTOKEN in .env/.env.local or env"; exit 1)'
+      - ngrok config add-authtoken ${NGROK_AUTHTOKEN}
+  
+  server:
+    desc: Run Go server in foreground (requires TOKEN)
+    cmds:
+      - '[ -n "${TOKEN}" ] || (echo "Set TOKEN in .env/.env.local or env (export TOKEN=...)"; exit 1)'
+      - go run main.go -token=${TOKEN} -scale=${SCALE:-10} -addr=${ADDR:-:8080}
+  
+  ngrok:
+    desc: Ensure auth and start ngrok HTTP tunnel (targets ${HTTP_PORT:-8080})
+    deps:
+      - ngrok-auth
+    cmds:
+      - ngrok http ${HTTP_PORT:-8080}
