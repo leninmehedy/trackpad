@@ -62,11 +62,24 @@
             touch-action: manipulation;
         }
 
+        .toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            color: #afa;
+            padding: 6px 8px;
+            border-radius: 6px;
+            border: 1px solid rgba(0,255,0,0.06);
+            background: transparent;
+            flex: 0 0 auto;
+        }
+
         /* Touchpad fills full width and remaining height */
         #touchpad {
             position: absolute;
-            left: 0;
-            right: 0;
+            left: env(safe-area-inset-left, 0);
+            right: env(safe-area-inset-right, 0);
             top: calc(var(--setup-height) + env(safe-area-inset-top, 0));
             bottom: env(safe-area-inset-bottom, 0);
             margin: 0;
@@ -76,8 +89,7 @@
             touch-action: none;
             display: none;
             box-sizing: border-box;
-            width: 100vw;
-            /* height is handled by top/bottom positioning; JS fallback will set exact px height */
+            width: auto; /* let left/right positioning determine width */
             overflow: hidden;
         }
 
@@ -105,6 +117,9 @@
     <input id="token" type="text" placeholder="Secret Token" autocomplete="off" inputmode="text">
     <button id="connectBtn" class="btn">Connect</button>
     <button id="disconnectBtn" class="btn" style="display:none">Disconnect</button>
+    <label class="toggle" title="Invert two-finger scroll direction">
+      <input id="invertScrollToggle" type="checkbox" style="width:16px;height:16px"> Invert Scroll
+    </label>
 </div>
 
 <div id="touchpad" role="application" aria-label="Touchpad area"></div>
@@ -112,15 +127,29 @@
 <script>
   /* Brief: keep existing touch/WS logic but ensure touchpad occupies full viewport.
      resizePad() computes available height and sets it as fallback for browsers that
-     don't support CSS env() variables or exact positioning. */
+     don't support CSS env() variables or exact positioning. Also add invert-scroll
+     toggle persisted to localStorage and used before sending scroll messages. */
 
   const pad = document.getElementById('touchpad');
   const setup = document.getElementById('setup');
   const tokenInput = document.getElementById('token');
   const connectBtn = document.getElementById('connectBtn');
   const disconnectBtn = document.getElementById('disconnectBtn');
+  const invertToggle = document.getElementById('invertScrollToggle');
 
   let ws = null;
+  let invertScroll = JSON.parse(localStorage.getItem('invertScroll') || 'false');
+  invertToggle.checked = invertScroll;
+
+  invertToggle.addEventListener('change', () => {
+    invertScroll = !!invertToggle.checked;
+    localStorage.setItem('invertScroll', JSON.stringify(invertScroll));
+  });
+
+  /* Allow pressing Enter to connect */
+  tokenInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') connectBtn.click();
+  });
 
   /* Toggle UI when connected */
   function setConnected(connected) {
@@ -130,11 +159,14 @@
       disconnectBtn.style.display = 'inline-block';
       pad.style.display = 'block';
       resizePad();
+      // visual cue
+      pad.style.borderColor = '#0f0';
     } else {
       tokenInput.style.display = '';
       connectBtn.style.display = '';
       disconnectBtn.style.display = 'none';
       pad.style.display = 'none';
+      pad.style.borderColor = 'lime';
     }
   }
 
@@ -231,7 +263,11 @@
         const curDist = dist(t1, t2), deltaDist = lastPinchDist ? curDist - lastPinchDist : 0;
         const pinchThreshold = 10;
         if (Math.abs(deltaDist) > pinchThreshold) ws.send(JSON.stringify({type: 'zoom', delta: deltaDist}));
-        else ws.send(JSON.stringify({type: 'scroll', dx, dy}));
+        else {
+          // apply invert-scroll preference for two-finger scrolls
+          const dyToSend = invertScroll ? -dy : dy;
+          ws.send(JSON.stringify({type: 'scroll', dx, dy: dyToSend}));
+        }
         lastPinchDist = curDist;
       }
       lastTwoTouch = {x: midX, y: midY};
